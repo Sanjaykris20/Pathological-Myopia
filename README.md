@@ -1,1 +1,1058 @@
-# Pathological-Myopia
+# Pathological Myopia — Multi-Model Benchmark & RETFound Multi-Task Learning
+
+A research-oriented deep learning pipeline for **pathological myopia (PM) analysis from color fundus photographs**, combining multi-dataset harmonization, leakage-safe preprocessing, six-model benchmarking, and an advanced **RETFound ViT-L/16 multi-task framework**.
+
+The project is designed not only to classify pathological myopia, but also to investigate **disease severity, foveal localization, and retinal lesion segmentation** within a unified framework.
+
+---
+
+## 📌 Overview
+
+Pathological myopia is a high-risk form of myopia associated with progressive structural changes in the posterior segment of the eye. Fundus photography provides a non-invasive method for observing these changes, but publicly available datasets differ substantially in:
+
+- Image resolution
+- Annotation format
+- Disease definitions
+- Available clinical labels
+- Segmentation masks
+- Foveal annotations
+- Dataset organization
+
+This project develops a **harmonized multi-dataset pipeline** that addresses these differences before model training.
+
+The complete workflow is:
+
+```text
+Multi-Dataset Fundus Images
+          │
+          ▼
+Dataset Harmonization
+          │
+          ▼
+Image Quality Control
+          │
+          ▼
+Exact Duplicate Merging
+          │
+          ▼
+Near-Duplicate Detection
+          │
+          ▼
+Group-Aware Data Splitting
+          │
+          ▼
+FOV Detection & Cropping
+          │
+          ▼
+Square Padding
+          │
+          ▼
+512 × 512 Standardization
+          │
+          ▼
+Optional CLAHE Enhancement
+          │
+          ▼
+Synchronized Annotation Transformation
+          │
+          ├── Fovea Coordinates
+          └── Segmentation Masks
+          │
+          ▼
+Six-Model Baseline Benchmark
+          │
+          ▼
+Benchmark Selection
+          │
+          ▼
+RETFound ViT-L/16
+          │
+          ├── Pathological Myopia
+          ├── Severity
+          ├── Fovea Localization
+          └── Lesion Segmentation
+          │
+          ▼
+Calibration & Quantitative Phenotyping
+          │
+          ▼
+Explainability & Final Evaluation
+```
+
+---
+
+# 🎯 Research Objectives
+
+The project focuses on four primary prediction tasks:
+
+### 1. Pathological Myopia Classification
+
+Binary classification:
+
+```text
+0 → Non-pathological myopia / negative
+1 → Pathological myopia
+```
+
+### 2. Pathological Myopia Severity
+
+Five severity categories are used:
+
+| Class | Description |
+|---:|---|
+| 0 | No lesion |
+| 1 | Tessellated fundus |
+| 2 | Diffuse atrophy |
+| 3 | Patchy atrophy |
+| 4 | Macular atrophy |
+
+### 3. Fovea Localization
+
+The model predicts normalized:
+
+```text
+(x, y)
+```
+
+coordinates of the fovea within the standardized fundus image.
+
+### 4. Retinal Lesion Segmentation
+
+The framework supports segmentation of:
+
+- Optic disc
+- Atrophy
+- Lacquer cracks
+- Choroidal neovascularization (CNV)
+- Fuchs spots
+- Tessellation
+
+---
+
+# 🧠 Key Research Contributions
+
+The pipeline emphasizes methodological reliability rather than simply maximizing classification accuracy.
+
+### Multi-dataset harmonization
+
+Different datasets are converted into a common metadata representation.
+
+### Missing annotation ≠ negative annotation
+
+If a dataset does not provide an annotation, the value is treated as **unknown**, rather than assuming the corresponding disease/lesion is absent.
+
+### Duplicate-aware dataset construction
+
+Both exact and perceptual duplicates are investigated before splitting the data.
+
+### Leakage-safe splitting
+
+Images belonging to the same source/group or near-duplicate cluster are prevented from crossing train/validation/test boundaries.
+
+### Spatially consistent preprocessing
+
+The same geometric transformation is applied to:
+
+- Fundus image
+- Fovea coordinates
+- Segmentation masks
+- FOV mask
+
+### Multi-task learning
+
+A shared RETFound representation is used for multiple clinically meaningful tasks.
+
+### Calibration
+
+Validation data are used for probability calibration and threshold selection rather than tuning directly on the test set.
+
+### Quantitative phenotyping
+
+Segmentation predictions can be converted into quantitative measurements such as:
+
+- Lesion area in pixels
+- Lesion fraction of fundus
+- Distances relative to the fovea
+- Distances relative to optic-disc geometry
+
+No physical `mm²` measurements are reported because physical image scale is unavailable.
+
+---
+
+# 📊 Datasets
+
+The current pipeline harmonizes four sources.
+
+| Dataset | Images | Main Information |
+|---|---:|---|
+| PALM | 1,200 | PM labels + fovea localization |
+| MMAC2023 | 1,572 | Severity + lesion annotations |
+| HRF-Seg+ | 45 | Optic-disc segmentation |
+| MCTN | 289 | Fundus images |
+| **Total** | **3,106** | Before QC/deduplication |
+
+After exact duplicate merging, the harmonized dataset contains approximately:
+
+```text
+3,045 images
+2,729 groups
+```
+
+The final split is approximately:
+
+```text
+Train : 71.8%
+Validation : 14.6%
+Test : 13.6%
+```
+
+Exact values are generated by the notebook and should be treated as experiment outputs rather than fixed dataset constants.
+
+---
+
+# 🔬 Dataset Annotation Strategy
+
+The datasets provide complementary supervision.
+
+```text
+PALM
+ ├── PM classification
+ └── Fovea localization
+
+MMAC2023
+ ├── Severity
+ ├── Lacquer cracks
+ ├── CNV
+ └── Fuchs spots
+
+HRF-Seg+
+ └── Optic disc segmentation
+
+MCTN
+ └── Fundus images
+```
+
+A harmonized metadata table is created with fields such as:
+
+```text
+dataset
+source_id
+image_path
+pm_label
+severity
+fovea_x
+fovea_y
+mask_disc
+mask_atrophy
+mask_lesion_lc
+mask_lesion_cnv
+mask_lesion_fs
+mask_tessellation
+```
+
+Missing values represent unavailable annotations.
+
+---
+
+# 🧹 Image Quality Control
+
+Every image undergoes an initial QC pass.
+
+The pipeline evaluates:
+
+- Image readability
+- Width and height
+- Green-channel brightness
+- Approximate FOV fraction
+- Blur/sharpness
+- Exact file hash
+- Perceptual hash
+
+## Blur Detection
+
+A Laplacian variance is used as a sharpness proxy.
+
+```python
+cv2.Laplacian(
+    small,
+    cv2.CV_64F
+).var()
+```
+
+Images in the lowest dataset-specific blur percentile are flagged.
+
+Importantly, flagged images are not automatically discarded unless their corresponding condition is included in the configured exclusion rules.
+
+In the current dataset:
+
+```text
+Unreadable: 0
+Too small: 0
+Too dark: 0
+Low FOV: 0
+Blurry flagged: 32
+Excluded: 0
+```
+
+---
+
+# 🔁 Duplicate Detection
+
+Two complementary approaches are used.
+
+## Exact Duplicates
+
+MD5 hashes identify byte-for-byte identical files.
+
+```python
+hashlib.md5(data).hexdigest()
+```
+
+Exact duplicates are merged so that complementary annotations from different dataset tasks can be combined.
+
+## Near Duplicates
+
+A perceptual hash (pHash) is calculated using:
+
+```text
+Black-border cropping
+       ↓
+32 × 32 resize
+       ↓
+DCT
+       ↓
+8 × 8 low-frequency representation
+       ↓
+Median thresholding
+       ↓
+64-bit perceptual hash
+```
+
+Images with a Hamming distance below the configured threshold are considered near duplicates.
+
+The default strategy is:
+
+```text
+near_action = "group"
+```
+
+Rather than automatically deleting near duplicates, they are grouped so that related images cannot appear across different dataset splits.
+
+---
+
+# 🛡️ Leakage Prevention
+
+Data leakage is treated as a major methodological concern.
+
+The pipeline uses group-aware splitting based on relationships such as:
+
+- Source identity
+- Duplicate clusters
+- Near-duplicate relationships
+
+The goal is:
+
+```text
+Train
+  │
+  ├── No exact duplicate of validation
+  ├── No exact duplicate of test
+  └── No near-duplicate group crossing
+```
+
+This is particularly important for medical imaging because visually similar images from the same underlying subject or source can artificially inflate evaluation performance.
+
+---
+
+# 🖼️ Image Preprocessing
+
+The preprocessing pipeline converts heterogeneous fundus photographs into a common representation.
+
+## 1. Green-Channel FOV Detection
+
+The green channel is extracted:
+
+```python
+g = img_rgb[..., 1]
+```
+
+Gaussian smoothing is applied:
+
+```python
+cv2.GaussianBlur(
+    img_rgb[..., 1],
+    (0, 0),
+    2
+)
+```
+
+An adaptive threshold based on the image's 99th percentile is then used.
+
+Morphological opening and closing remove small artifacts and repair gaps.
+
+Connected-component analysis identifies the largest FOV region.
+
+---
+
+## 2. FOV Bounding Box
+
+The detected FOV is converted into a bounding box:
+
+```text
+x0
+y0
+width
+height
+```
+
+If the FOV cannot be reliably detected, the pipeline falls back to using the entire image.
+
+---
+
+## 3. Cropping
+
+The image is cropped to the detected fundus field.
+
+This reduces irrelevant black borders and background regions.
+
+---
+
+## 4. Square Padding
+
+The cropped image is placed inside a square canvas.
+
+The side length is:
+
+```python
+side = max(width, height)
+```
+
+This avoids stretching the retinal anatomy.
+
+Instead of:
+
+```text
+non-square → directly resize to 512 × 512
+```
+
+the pipeline performs:
+
+```text
+non-square crop
+      ↓
+square padding
+      ↓
+512 × 512
+```
+
+---
+
+## 5. Resize
+
+The square representation is resized to:
+
+```text
+512 × 512
+```
+
+using area interpolation for the image.
+
+---
+
+## 6. CLAHE
+
+When enabled, CLAHE is applied to the lightness channel in LAB color space.
+
+```text
+RGB
+ ↓
+LAB
+ ↓
+CLAHE on L channel
+ ↓
+RGB
+```
+
+This enhances local contrast while avoiding direct manipulation of the image's primary color channels.
+
+---
+
+# 📍 Synchronized Fovea Transformation
+
+Fovea coordinates cannot simply be kept unchanged after cropping.
+
+The pipeline transforms the coordinates using the same crop and padding geometry:
+
+```python
+fovea_x_n = (
+    fovea_x - crop_x0 + pad_x
+) / crop_side
+
+fovea_y_n = (
+    fovea_y - crop_y0 + pad_y
+) / crop_side
+```
+
+The final representation is normalized to approximately:
+
+```text
+0 ≤ x ≤ 1
+0 ≤ y ≤ 1
+```
+
+This allows fovea localization to remain consistent across images with different original resolutions.
+
+---
+
+# 🩻 Segmentation Mask Harmonization
+
+Raw masks can have different formats between datasets.
+
+The pipeline converts them into binary masks.
+
+Default:
+
+```python
+_gray(mask) > 0
+```
+
+A dataset-specific rule is available for HRF-Seg+ optic-disc masks.
+
+Masks are resized using:
+
+```python
+cv2.INTER_NEAREST
+```
+
+to preserve discrete foreground/background labels.
+
+Most importantly, masks undergo the **same crop, padding, and resizing geometry as the corresponding fundus image**.
+
+---
+
+# 💾 Preprocessing Cache
+
+Processed images and metadata are cached to disk.
+
+The cache contains:
+
+```text
+preprocessed image
+FOV mask
+segmentation masks
+crop geometry
+original image dimensions
+normalized fovea coordinates
+```
+
+This prevents repeated preprocessing when experiments are rerun.
+
+---
+
+# 🏗️ Model Benchmark
+
+The baseline benchmark contains six architectures:
+
+| Model | Architecture |
+|---|---|
+| ResNet-50 | CNN |
+| DenseNet-121 | CNN |
+| EfficientNet-B4 | CNN |
+| ViT-B/16 | Vision Transformer |
+| Swin-Tiny | Hierarchical Transformer |
+| RETFound | ViT-L/16 |
+
+The benchmark provides a controlled comparison between conventional CNNs and transformer-based architectures.
+
+The models are first sanity-checked for:
+
+- Model construction
+- Parameter count
+- Input compatibility
+- Output shape
+
+---
+
+# 🚀 RETFound Multi-Task Model
+
+The advanced model uses:
+
+```text
+RETFound
+ViT-L/16
+```
+
+as the shared image encoder.
+
+The multi-task architecture contains task-specific prediction heads for:
+
+```text
+                   RETFound
+                       │
+        ┌──────────────┼──────────────┐
+        │              │              │
+        ▼              ▼              ▼
+       PM          Severity         Fovea
+        │              │              │
+        └──────────────┼──────────────┘
+                       │
+                       ▼
+                 Segmentation
+```
+
+This allows the encoder to learn a shared retinal representation while simultaneously supporting several complementary clinical tasks.
+
+---
+
+# 🎯 Multi-Task Objectives
+
+## Pathological Myopia
+
+Binary classification using a PM-specific loss configuration.
+
+## Severity
+
+Five-class ordinal disease severity prediction.
+
+The framework evaluates ordinal severity using metrics including Spearman correlation.
+
+## Fovea
+
+Regression of normalized foveal coordinates using a robust regression objective.
+
+## Segmentation
+
+Lesion and anatomical structure segmentation using a combination of focal-Tversky and Dice-based objectives.
+
+---
+
+# ⚖️ Loss Weighting
+
+The advanced model supports uncertainty-based task weighting.
+
+The objective combines:
+
+```text
+PM loss
++
+Severity loss
++
+Fovea loss
++
+Segmentation loss
+```
+
+while allowing the relative contribution of tasks to be learned rather than relying entirely on manually fixed task weights.
+
+---
+
+# 🖥️ Training Configuration
+
+The notebook is designed for a single NVIDIA T4 16 GB environment.
+
+The advanced model uses:
+
+- FP16 mixed precision
+- Gradient accumulation
+- Gradient checkpointing
+- AdamW
+- Layer-wise learning-rate decay
+- Warm-up
+- Cosine scheduling
+
+The effective batch size is increased through gradient accumulation.
+
+---
+
+# 📐 Evaluation
+
+The classification benchmark includes:
+
+- AUROC
+- AUPRC
+- F1-score
+- Precision
+- Recall / Sensitivity
+- Specificity
+- Balanced accuracy
+- Expected Calibration Error (ECE)
+- Brier score
+- Confusion matrix
+
+Severity evaluation additionally considers ordinal agreement/correlation.
+
+Segmentation evaluation includes quantitative mask-based analysis.
+
+---
+
+# 🌡️ Calibration
+
+Calibration parameters are fitted using validation data.
+
+The test set is not used to determine:
+
+- Probability calibration
+- PM decision thresholds
+- Severity temperature scaling
+
+This prevents test-set information from influencing model selection or calibration.
+
+---
+
+# 🔬 Quantitative Phenotyping
+
+The trained model can generate quantitative measurements from segmentation predictions.
+
+Measurements include:
+
+- Lesion area in pixels
+- Lesion fraction relative to the fundus
+- Fovea-relative distances
+- Optic-disc geometry
+- DD-relative measurements
+
+Because the datasets do not provide a physical pixel-to-millimeter calibration, the pipeline does **not** report lesion areas as `mm²`.
+
+---
+
+# 🔎 Single-Image Inference
+
+The notebook provides a `predict_image()` workflow for processing a new fundus photograph.
+
+The inference pipeline is:
+
+```text
+New Fundus Image
+       ↓
+RGB conversion
+       ↓
+Same preprocessing pipeline
+       ↓
+RETFound
+       ↓
+Calibrated predictions
+       ├── PM probability
+       ├── PM label
+       ├── Severity probabilities
+       ├── Fovea coordinates
+       └── Segmentation masks
+```
+
+The system can save:
+
+```text
+prediction.json
+overlay.png
+```
+
+The prediction output contains calibrated probabilities and spatial information.
+
+---
+
+# 📁 Project Structure
+
+A typical experiment directory follows the structure:
+
+```text
+project/
+│
+├── pathological-myopia.ipynb
+│
+├── data/
+│   ├── PALM/
+│   ├── MMAC2023/
+│   ├── HRF-Seg+/
+│   └── MCTN/
+│
+├── experiments/
+│   ├── metadata_raw.csv
+│   ├── qc_report.csv
+│   ├── meta_prep.csv
+│   │
+│   ├── preprocessing/
+│   ├── checkpoints/
+│   ├── metrics/
+│   ├── inference/
+│   └── explainability/
+│
+├── README.md
+└── requirements.txt
+```
+
+Dataset locations are configured inside the notebook rather than committed to the repository.
+
+---
+
+# ⚙️ Installation
+
+Clone the repository:
+
+```bash
+git clone <YOUR_REPOSITORY_URL>
+cd <YOUR_REPOSITORY_NAME>
+```
+
+Create a Python environment:
+
+```bash
+python -m venv venv
+```
+
+Activate it on Windows:
+
+```bash
+venv\Scripts\activate
+```
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+The notebook primarily uses:
+
+```text
+Python
+PyTorch
+TorchVision / timm
+OpenCV
+Albumentations
+NumPy
+Pandas
+SciPy
+scikit-learn
+Pillow
+Matplotlib
+tqdm
+openpyxl
+```
+
+---
+
+# ▶️ Running the Notebook
+
+Open:
+
+```bash
+jupyter notebook
+```
+
+or:
+
+```bash
+jupyter lab
+```
+
+Then open:
+
+```text
+pathological-myopia.ipynb
+```
+
+Before running the experiment:
+
+1. Configure dataset paths.
+2. Verify the required datasets are available.
+3. Verify the RETFound checkpoint.
+4. Confirm the experiment configuration.
+5. Run dataset discovery.
+6. Run QC.
+7. Run duplicate detection.
+8. Generate leakage-safe splits.
+9. Run preprocessing.
+10. Run baseline benchmarking.
+11. Select the benchmark model.
+12. Train/evaluate the RETFound multi-task model.
+13. Calibrate using validation data.
+14. Perform final evaluation.
+15. Generate quantitative phenotyping and inference artifacts.
+
+---
+
+# 🔒 Reproducibility
+
+The experiment uses a fixed seed:
+
+```python
+SEED = 42
+```
+
+Randomness is controlled across:
+
+```text
+Python
+NumPy
+PyTorch
+CUDA
+DataLoader workers
+```
+
+The notebook also records environment information, package versions, CUDA information, GPU information, preprocessing configuration, model configuration, dataset statistics, and checkpoint information.
+
+The goal is to make each experiment traceable and reproducible.
+
+---
+
+# ⚠️ Important Research Safeguards
+
+This project intentionally follows several safeguards.
+
+### Missing annotations are not negative labels
+
+```text
+NaN ≠ 0
+```
+
+An unavailable annotation remains unknown.
+
+### Test data are isolated
+
+The test set should only be accessed when the configured test evaluation is explicitly enabled.
+
+### Calibration uses validation data
+
+Thresholds and temperature scaling are fitted without using the test set.
+
+### No silent random initialization
+
+The RETFound checkpoint is validated before being used.
+
+### No physical measurements without scale
+
+Pixel measurements are not converted to `mm²` without a valid physical calibration.
+
+### Spatial annotations remain synchronized
+
+Image, mask, FOV, and fovea transformations use consistent geometry.
+
+---
+
+# 📈 Expected Research Outputs
+
+The experiment can produce:
+
+```text
+Dataset statistics
+        ↓
+QC report
+        ↓
+Duplicate report
+        ↓
+Leakage checks
+        ↓
+Preprocessed dataset
+        ↓
+Baseline benchmark
+        ↓
+Best-model selection
+        ↓
+RETFound multi-task model
+        ↓
+Calibration results
+        ↓
+Final evaluation
+        ↓
+Quantitative phenotyping
+        ↓
+Inference overlays
+```
+
+Example artifacts include:
+
+```text
+metadata_raw.csv
+qc_report.csv
+meta_prep.csv
+dataset_distribution.png
+annotation_availability.png
+leakage_checks.json
+checkpoint files
+classification metrics
+segmentation metrics
+quantification results
+prediction JSON files
+prediction overlays
+```
+
+---
+
+# 🧪 Research Status
+
+This repository is intended as a **research implementation and experimental benchmark**, not as a clinically validated diagnostic system.
+
+Model predictions should not be interpreted as medical diagnoses.
+
+Further external validation, prospective evaluation, calibration assessment, and clinical validation would be required before clinical deployment.
+
+---
+
+# 📚 Reproducibility Statement
+
+All preprocessing decisions, dataset harmonization rules, duplicate handling procedures, split logic, model configurations, optimization settings, and evaluation procedures are explicitly defined in the notebook.
+
+The objective is to make the experimental pipeline transparent from:
+
+```text
+Raw Fundus Image
+```
+
+to:
+
+```text
+Final Model Prediction
+```
+
+without hidden preprocessing or undocumented label transformations.
+
+---
+
+# 👥 Project
+
+**Project:** Pathological Myopia Multi-Task Deep Learning
+
+**Primary modality:** Color Fundus Photography
+
+**Primary encoder:** RETFound ViT-L/16
+
+**Tasks:**
+
+```text
+Pathological Myopia Classification
+Severity Classification
+Fovea Localization
+Retinal Lesion Segmentation
+```
+
+**Hardware target:** NVIDIA T4 16 GB
+
+**Precision:** FP16 mixed precision
+
+---
+
+# 📜 Disclaimer
+
+This repository is intended for academic and research purposes only.
+
+The models and predictions generated by this project are not intended to replace ophthalmologist evaluation or clinical diagnosis.
+
+---
+
+## ⭐ Citation
+
+If this work is used in research, please cite the associated paper and repository.
+
+```bibtex
+@software{pathological_myopia_multitask,
+  title  = {Pathological Myopia Multi-Task Deep Learning},
+  author = {Sanjay Krishnan},
+  year   = {2026},
+  note   = {Research implementation}
+}
+```
+
+---
+
+## ⭐ Acknowledgement
+
+This project builds upon publicly available retinal imaging datasets and deep learning frameworks. Dataset-specific terms, licenses, and citation requirements should be followed according to the original dataset providers.
